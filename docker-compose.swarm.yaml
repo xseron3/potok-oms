@@ -1,0 +1,89 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: potok
+      POSTGRES_USER: potok_admin
+      POSTGRES_PASSWORD: potok_secret_2026
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U potok_admin -d potok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  db-init:
+    image: localhost:5000/potok-db-init:1.0
+    environment:
+      DB_HOST: db
+      DB_NAME: potok
+      DB_USER: potok_admin
+      PGPASSWORD: potok_secret_2026
+    networks:
+      - net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: none
+
+  backend:
+    image: localhost:5000/potok-backend:1.0
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: potok
+      DB_USER: potok_admin
+      DB_PASSWORD: potok_secret_2026
+    networks:
+      - net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  frontend:
+    image: localhost:5000/potok-frontend:1.0
+    networks:
+      - net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+
+  proxy:
+    image: localhost:5000/potok-proxy:1.0
+    ports:
+      - "80:80"
+    networks:
+      - net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+networks:
+  net:
+    driver: overlay
+
+volumes:
+  pgdata:

@@ -1,0 +1,119 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Сборка и публикация образов
+    runs-on: ubuntu-latest
+    steps:
+      - name: Получение кода
+        uses: actions/checkout@v4
+
+      - name: Настройка Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Авторизация в Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Сборка и публикация frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/potok-frontend:latest
+
+      - name: Сборка и публикация proxy
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: proxy/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/potok-proxy:latest
+
+      - name: Сборка и публикация backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/potok-backend:latest
+
+      - name: Сборка и публикация db-init
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: db-init/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/potok-db-init:latest
+
+  test:
+    name: Развёртывание и тестирование
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Получение кода
+        uses: actions/checkout@v4
+
+      - name: Создание сети
+        run: docker network create potok-net
+
+      - name: Сборка и запуск системы
+        run: docker compose up -d --build
+
+      - name: Ожидание готовности сервисов
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost/health > /dev/null && curl -fs http://localhost/api/health > /dev/null; then
+              echo "Сервисы готовы"
+              exit 0
+            fi
+            echo "Попытка $i: сервисы ещё не готовы"
+            sleep 5
+          done
+          echo "Сервисы не поднялись за 150 секунд"
+          docker compose logs
+          exit 1
+
+      - name: Проверка состояния контейнеров
+        run: |
+          docker compose ps -a
+          for s in frontend proxy backend db; do
+            state=$(docker inspect -f '{{.State.Running}}' $s)
+            if [ "$state" != "true" ]; then
+              echo "Контейнер $s не запущен"
+              docker compose logs $s
+              exit 1
+            fi
+            echo "$s — запущен"
+          done
+          code=$(docker inspect -f '{{.State.ExitCode}}' db-init)
+          if [ "$code" != "0" ]; then
+            echo "db-init завершился с кодом $code"
+            docker compose logs db-init
+            exit 1
+          fi
+          echo "db-init — код завершения 0"
+
+      - name: Проверка HTTP-эндпоинтов
+        run: |
+          curl -fs http://localhost/health
+          curl -fs http://localhost/proxy-health
+          curl -fs http://localhost/api/health
+          curl -fs http://localhost/api/orders | grep -q "ORD-1041"
+          echo "Все эндпоинты отвечают корректно"
+
+      - name: Проверка данных в PostgreSQL
+        run: |
+          docker exec db psql -U potok_admin -d potok -c "SELECT status, count(*) FROM orders GROUP BY status;"
+
+      - name: Остановка системы
+        if: always()
+        run: docker compose down --volumes

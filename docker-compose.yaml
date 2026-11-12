@@ -1,0 +1,102 @@
+services:
+  frontend:
+    image: potok-frontend:1.0
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: frontend
+    networks:
+      - potok-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  proxy:
+    image: potok-proxy:1.0
+    build:
+      context: .
+      dockerfile: proxy/Dockerfile
+    container_name: proxy
+    ports:
+      - "80:80"
+    networks:
+      - potok-net
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    container_name: db
+    environment:
+      POSTGRES_DB: potok
+      POSTGRES_USER: potok_admin
+      POSTGRES_PASSWORD: potok_secret_2026
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - potok-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U potok_admin -d potok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  db-init:
+    image: potok-db-init:1.0
+    build:
+      context: .
+      dockerfile: db-init/Dockerfile
+    container_name: db-init
+    environment:
+      DB_HOST: db
+      DB_NAME: potok
+      DB_USER: potok_admin
+      PGPASSWORD: potok_secret_2026
+    networks:
+      - potok-net
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    image: potok-backend:1.0
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: backend
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: potok
+      DB_USER: potok_admin
+      DB_PASSWORD: potok_secret_2026
+    networks:
+      - potok-net
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+networks:
+  potok-net:
+    external: true
+
+volumes:
+  pgdata:
