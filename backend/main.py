@@ -18,6 +18,7 @@ def get_db():
     return psycopg2.connect(**DB_CONFIG)
 
 @app.get("/health")
+@app.get("/api/health")
 def health():
     try:
         conn = get_db()
